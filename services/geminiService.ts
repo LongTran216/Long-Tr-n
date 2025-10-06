@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Modality } from "@google/genai";
 import type { EditedImageResponse } from '../types';
 
@@ -7,7 +6,7 @@ if (!process.env.API_KEY) {
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-const model = 'gemini-2.5-flash-image-preview';
+const model = 'gemini-2.5-flash-image';
 
 export const editImageWithNanoBanana = async (
   base64ImageData: string,
@@ -17,7 +16,8 @@ export const editImageWithNanoBanana = async (
   try {
     const response = await ai.models.generateContent({
       model: model,
-      contents: {
+      contents: [{
+        role: 'user',
         parts: [
           {
             inlineData: {
@@ -29,34 +29,54 @@ export const editImageWithNanoBanana = async (
             text: prompt,
           },
         ],
-      },
+      }],
       config: {
         responseModalities: [Modality.IMAGE, Modality.TEXT],
       },
     });
 
+    // More robust error handling for safety blocks
+    if (response.promptFeedback?.blockReason) {
+      throw new Error(`Request was blocked due to: ${response.promptFeedback.blockReason}. Please adjust your prompt.`);
+    }
+
+    const candidate = response.candidates?.[0];
+    if (!candidate) {
+      throw new Error("API returned no candidates. The prompt may have been blocked entirely.");
+    }
+    
+    if (candidate.finishReason === 'SAFETY') {
+      throw new Error("The response was blocked due to safety settings. Please try a different prompt.");
+    }
+    
+    if (!candidate.content?.parts || candidate.content.parts.length === 0) {
+      throw new Error("API returned an empty response. This may be due to the prompt being too vague or a safety block.");
+    }
+
     let editedImageBase64: string | null = null;
     let responseText: string | null = null;
 
-    if (response.candidates && response.candidates.length > 0) {
-        const parts = response.candidates[0].content.parts;
-        for (const part of parts) {
-            if (part.inlineData) {
-                editedImageBase64 = part.inlineData.data;
-            } else if (part.text) {
-                responseText = part.text;
-            }
+    for (const part of candidate.content.parts) {
+        if (part.inlineData) {
+            editedImageBase64 = part.inlineData.data;
+        } else if (part.text) {
+            responseText = part.text;
         }
     }
 
     if (!editedImageBase64 && !responseText) {
-        throw new Error("API returned an empty response. The prompt might have been blocked.");
+        throw new Error("Could not parse a valid image or text from the AI's response.");
     }
 
     return { editedImageBase64, responseText };
 
   } catch (error) {
     console.error("Error calling Gemini API:", error);
-    throw new Error("Failed to edit image with AI. Please check the console for details.");
+    if (error instanceof Error) {
+      // Re-throw the original error to preserve its message for the UI
+      throw error;
+    }
+    // For non-Error exceptions, wrap them
+    throw new Error("An unexpected error occurred while communicating with the AI.");
   }
 };

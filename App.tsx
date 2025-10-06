@@ -1,5 +1,4 @@
-
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { editImageWithNanoBanana } from './services/geminiService';
 import type { EditedImageResponse } from './types';
 import Header from './components/Header';
@@ -8,7 +7,7 @@ import ImageDisplay from './components/ImageDisplay';
 import ControlPanel from './components/ControlPanel';
 import Loader from './components/Loader';
 import ErrorMessage from './components/ErrorMessage';
-import { fileToBase64 } from './utils/fileUtils';
+import { fileToBase64, convertImageFormat, dataUrlToFile } from './utils/fileUtils';
 
 const App: React.FC = () => {
   const [originalImage, setOriginalImage] = useState<File | null>(null);
@@ -18,6 +17,23 @@ const App: React.FC = () => {
   const [responseText, setResponseText] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [outputFormat, setOutputFormat] = useState<string>(
+    () => localStorage.getItem('outputFormat') || 'image/png'
+  );
+  const [blurAmount, setBlurAmount] = useState<number>(0);
+  const [enhanceAmount, setEnhanceAmount] = useState<number>(0);
+
+  // State for text overlay
+  const [textOverlay, setTextOverlay] = useState<string>('');
+  const [fontFamily, setFontFamily] = useState<string>('Arial');
+  const [fontSize, setFontSize] = useState<number>(48);
+  const [fontColor, setFontColor] = useState<string>('#FFFFFF');
+  const [textPosition, setTextPosition] = useState<string>('bottom-center');
+
+
+  useEffect(() => {
+    localStorage.setItem('outputFormat', outputFormat);
+  }, [outputFormat]);
 
   const handleImageChange = (file: File | null) => {
     if (file) {
@@ -26,11 +42,16 @@ const App: React.FC = () => {
       setEditedImageUrl(null);
       setResponseText(null);
       setError(null);
+      setPrompt('');
+      setBlurAmount(0);
+      setEnhanceAmount(0);
+      setTextOverlay('');
     }
   };
 
-  const handleGenerate = useCallback(async () => {
-    if (!originalImage || !prompt) {
+  const handleGenerate = useCallback(async (promptOverride?: string) => {
+    const finalPrompt = promptOverride ?? prompt;
+    if (!originalImage || !finalPrompt) {
       setError('Please upload an image and enter a prompt.');
       return;
     }
@@ -39,13 +60,21 @@ const App: React.FC = () => {
     setError(null);
     setEditedImageUrl(null);
     setResponseText(null);
+    setBlurAmount(0);
+    setEnhanceAmount(0);
 
     try {
       const { base64, mimeType } = await fileToBase64(originalImage);
-      const result: EditedImageResponse = await editImageWithNanoBanana(base64, mimeType, prompt);
+      const result: EditedImageResponse = await editImageWithNanoBanana(base64, mimeType, finalPrompt);
       
       if (result.editedImageBase64) {
-          setEditedImageUrl(`data:${mimeType};base64,${result.editedImageBase64}`);
+          const receivedDataUrl = `data:image/png;base64,${result.editedImageBase64}`;
+          if (outputFormat === 'image/png') {
+            setEditedImageUrl(receivedDataUrl);
+          } else {
+            const convertedDataUrl = await convertImageFormat(receivedDataUrl, outputFormat as 'image/jpeg' | 'image/png');
+            setEditedImageUrl(convertedDataUrl);
+          }
       } else {
         setError("The AI did not return an image. It might have refused the request. Try a different prompt.");
       }
@@ -57,7 +86,18 @@ const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [originalImage, prompt]);
+  }, [originalImage, prompt, outputFormat]);
+  
+  const handleUseAsOriginal = useCallback(async (imageUrl: string) => {
+    try {
+      const file = await dataUrlToFile(imageUrl, `edited-image-${Date.now()}.png`);
+      handleImageChange(file);
+    } catch (err) {
+      console.error("Failed to use image as original:", err);
+      setError("Could not process the edited image to use as a new original.");
+    }
+  }, []);
+
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 font-sans">
@@ -77,19 +117,45 @@ const App: React.FC = () => {
                     onGenerate={handleGenerate}
                     isLoading={isLoading}
                     isReady={!!originalImage}
+                    outputFormat={outputFormat}
+                    onOutputFormatChange={setOutputFormat}
+                    isEdited={!!editedImageUrl}
+                    blurAmount={blurAmount}
+                    onBlurChange={setBlurAmount}
+                    enhanceAmount={enhanceAmount}
+                    onEnhanceChange={setEnhanceAmount}
+                    textOverlay={textOverlay}
+                    onTextOverlayChange={setTextOverlay}
+                    fontFamily={fontFamily}
+                    onFontFamilyChange={setFontFamily}
+                    fontSize={fontSize}
+                    onFontSizeChange={setFontSize}
+                    fontColor={fontColor}
+                    onFontColorChange={setFontColor}
+                    textPosition={textPosition}
+                    onTextPositionChange={setTextPosition}
                 />
             </div>
           </div>
           <div className="lg:col-span-8 xl:col-span-9">
             <div className="bg-slate-800 p-6 rounded-2xl shadow-lg relative min-h-[300px] lg:min-h-[600px] flex flex-col justify-center items-center">
-              {isLoading && <Loader />}
-              {error && !isLoading && <ErrorMessage message={error} />}
-              
-              {!isLoading && !error && (
+              {isLoading ? (
+                <Loader />
+              ) : error ? (
+                <ErrorMessage message={error} />
+              ) : (
                 <ImageDisplay
                   originalImageUrl={originalImageUrl}
                   editedImageUrl={editedImageUrl}
                   responseText={responseText}
+                  blurAmount={blurAmount}
+                  enhanceAmount={enhanceAmount}
+                  onUseAsOriginal={handleUseAsOriginal}
+                  textOverlay={textOverlay}
+                  fontFamily={fontFamily}
+                  fontSize={fontSize}
+                  fontColor={fontColor}
+                  textPosition={textPosition}
                 />
               )}
             </div>
